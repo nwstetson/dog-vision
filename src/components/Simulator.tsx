@@ -3,17 +3,12 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 type ViewMode = 'split' | 'toggle'
 type ToggleMode = 'normal' | 'dog'
 type MediaKind = 'image' | 'video'
+type SampleKey = 'outdoors' | 'agility-course'
 
-interface MediaSelection {
-  source: string
-  kind: MediaKind
-  objectUrl: boolean
+const SAMPLE_IMAGES: Record<SampleKey, { label: string; src: string }> = {
+  outdoors: { label: 'Outdoors', src: '/samples/outdoors.svg' },
+  'agility-course': { label: 'Agility Course', src: '/samples/agility-course.svg' },
 }
-
-const SAMPLE_IMAGES: Array<{ label: string; source: string }> = [
-  { label: 'Outdoors', source: '/samples/outdoors.svg' },
-  { label: 'Agility Course', source: '/samples/agility-course.svg' },
-]
 
 function isProbablyMobile() {
   const navWithUserAgentData = navigator as Navigator & {
@@ -25,29 +20,9 @@ function isProbablyMobile() {
   return Boolean(maybeMobile)
 }
 
-function sanitizeMediaSource(selection: MediaSelection): MediaSelection | null {
-  if (selection.objectUrl) {
-    return selection.source.startsWith('blob:') ? selection : null
-  }
-  if (selection.source.startsWith('/samples/')) {
-    return selection
-  }
-
-  try {
-    const parsedUrl = new URL(selection.source, window.location.origin)
-    const safeProtocol =
-      parsedUrl.protocol === 'http:' ||
-      parsedUrl.protocol === 'https:' ||
-      parsedUrl.protocol === 'blob:' ||
-      (parsedUrl.protocol === 'data:' && /^data:(image|video)\//i.test(selection.source))
-    return safeProtocol ? selection : null
-  } catch {
-    return null
-  }
-}
-
 export function Simulator() {
-  const [selection, setSelection] = useState<MediaSelection | null>(null)
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [sampleSelection, setSampleSelection] = useState<SampleKey | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [toggleMode, setToggleMode] = useState<ToggleMode>('normal')
   const [liveMode, setLiveMode] = useState(false)
@@ -58,40 +33,42 @@ export function Simulator() {
   const dogLiveRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
-  const hasMedia = Boolean(selection)
+  const uploadedUrl = useMemo(
+    () => (uploadedFile ? URL.createObjectURL(uploadedFile) : null),
+    [uploadedFile],
+  )
+  const mediaSource = uploadedUrl ?? (sampleSelection ? SAMPLE_IMAGES[sampleSelection].src : null)
+  const mediaKind: MediaKind | null = uploadedFile
+    ? uploadedFile.type.startsWith('video/')
+      ? 'video'
+      : 'image'
+    : sampleSelection
+      ? 'image'
+      : null
+  const hasMedia = Boolean(mediaSource && mediaKind)
+
   const showNormal = viewMode === 'split' || toggleMode === 'normal'
   const showDog = viewMode === 'split' || toggleMode === 'dog'
 
   const mediaElements = useMemo(() => {
-    if (!selection) {
+    if (!mediaSource || !mediaKind) {
       return null
     }
 
-    if (selection.kind === 'image') {
+    if (mediaKind === 'image') {
       return {
-        normal: <img src={selection.source} alt="Original upload" className="preview-media" />,
+        normal: <img src={mediaSource} alt="Original upload" className="preview-media" />,
         dog: (
-          <img
-            src={selection.source}
-            alt="Dog-vision simulation"
-            className="preview-media dog-filtered"
-          />
+          <img src={mediaSource} alt="Dog-vision simulation" className="preview-media dog-filtered" />
         ),
       }
     }
 
     return {
-      normal: <video src={selection.source} className="preview-media" controls playsInline />,
-      dog: (
-        <video
-          src={selection.source}
-          className="preview-media dog-filtered"
-          controls
-          playsInline
-        />
-      ),
+      normal: <video src={mediaSource} className="preview-media" controls playsInline />,
+      dog: <video src={mediaSource} className="preview-media dog-filtered" controls playsInline />,
     }
-  }, [selection])
+  }, [mediaKind, mediaSource])
 
   const stopLiveMode = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -107,7 +84,6 @@ export function Simulator() {
         video: { facingMode: 'environment' },
         audio: false,
       })
-
       streamRef.current = stream
       if (normalLiveRef.current) {
         normalLiveRef.current.srcObject = stream
@@ -122,38 +98,37 @@ export function Simulator() {
     }
   }
 
-  const selectMedia = (nextSelection: MediaSelection) => {
-    const safeSelection = sanitizeMediaSource(nextSelection)
-    if (!safeSelection) {
-      setCameraError('Unsupported media source. Please choose a local upload or sample image.')
+  const onFileInput = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file || !(file.type.startsWith('image/') || file.type.startsWith('video/'))) {
       return
     }
     stopLiveMode()
-    if (selection?.objectUrl) {
-      URL.revokeObjectURL(selection.source)
-    }
-    setSelection(safeSelection)
     setCameraError('')
-  }
-
-  const onFileInput = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) {
-      return
-    }
-    const kind: MediaKind = file.type.startsWith('video/') ? 'video' : 'image'
-    selectMedia({ source: URL.createObjectURL(file), kind, objectUrl: true })
+    setSampleSelection(null)
+    setUploadedFile(file)
     event.target.value = ''
   }
+
+  const onSelectSample = (sample: SampleKey) => {
+    stopLiveMode()
+    setCameraError('')
+    setUploadedFile(null)
+    setSampleSelection(sample)
+  }
+
+  useEffect(() => {
+    if (!uploadedUrl) {
+      return
+    }
+    return () => URL.revokeObjectURL(uploadedUrl)
+  }, [uploadedUrl])
 
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((track) => track.stop())
-      if (selection?.objectUrl) {
-        URL.revokeObjectURL(selection.source)
-      }
     }
-  }, [selection])
+  }, [])
 
   return (
     <section className="panel simulator-panel" aria-labelledby="simulator-title">
@@ -169,20 +144,14 @@ export function Simulator() {
         <div className="field">
           <span>Sample images</span>
           <div className="sample-buttons">
-            {SAMPLE_IMAGES.map((sample) => (
+            {(Object.keys(SAMPLE_IMAGES) as SampleKey[]).map((sampleKey) => (
               <button
-                key={sample.source}
+                key={sampleKey}
                 type="button"
                 className="ghost-button"
-                onClick={() =>
-                  selectMedia({
-                    source: sample.source,
-                    kind: 'image',
-                    objectUrl: false,
-                  })
-                }
+                onClick={() => onSelectSample(sampleKey)}
               >
-                {sample.label}
+                {SAMPLE_IMAGES[sampleKey].label}
               </button>
             ))}
           </div>
