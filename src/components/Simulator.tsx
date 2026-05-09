@@ -25,6 +25,27 @@ function isProbablyMobile() {
   return Boolean(maybeMobile)
 }
 
+function sanitizeMediaSource(selection: MediaSelection): MediaSelection | null {
+  if (selection.objectUrl) {
+    return selection.source.startsWith('blob:') ? selection : null
+  }
+  if (selection.source.startsWith('/samples/')) {
+    return selection
+  }
+
+  try {
+    const parsedUrl = new URL(selection.source, window.location.origin)
+    const safeProtocol =
+      parsedUrl.protocol === 'http:' ||
+      parsedUrl.protocol === 'https:' ||
+      parsedUrl.protocol === 'blob:' ||
+      (parsedUrl.protocol === 'data:' && /^data:(image|video)\//i.test(selection.source))
+    return safeProtocol ? selection : null
+  } catch {
+    return null
+  }
+}
+
 export function Simulator() {
   const [selection, setSelection] = useState<MediaSelection | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('split')
@@ -102,11 +123,16 @@ export function Simulator() {
   }
 
   const selectMedia = (nextSelection: MediaSelection) => {
+    const safeSelection = sanitizeMediaSource(nextSelection)
+    if (!safeSelection) {
+      setCameraError('Unsupported media source. Please choose a local upload or sample image.')
+      return
+    }
     stopLiveMode()
     if (selection?.objectUrl) {
       URL.revokeObjectURL(selection.source)
     }
-    setSelection(nextSelection)
+    setSelection(safeSelection)
     setCameraError('')
   }
 
